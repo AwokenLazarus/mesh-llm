@@ -613,6 +613,15 @@ fn handle_binary_connection_messages(
                     let has_downstream = config.downstream.is_some();
                     let sample_prefill_final =
                         message.kind == WireMessageKind::PrefillFinalEmbd && downstream.is_none();
+                    // a generated token's step on this stage, for its compute meter; a
+                    // batched decode frame is counted by the scheduler that runs it
+                    let decode_steps = matches!(
+                        message.kind,
+                        WireMessageKind::DecodeEmbd
+                            | WireMessageKind::DecodeReadout
+                            | WireMessageKind::DecodeLightCtx
+                    )
+                    .then(|| executable_token_ids.len().max(1) as u64);
                     let scheduler_session_key = session_key.clone();
                     let scheduler_token_ids = executable_token_ids.to_vec();
                     let scheduler_kv = kv.cloned();
@@ -694,6 +703,9 @@ fn handle_binary_connection_messages(
                                 &scheduler_session_key,
                                 scheduler_message.state,
                             );
+                            if let Some(steps) = decode_steps {
+                                runtime.compute_meter().record_decode_tokens(steps);
+                            }
                             let sessions_after =
                                 collect_session_stats.then(|| runtime.session_stats());
                             Ok((

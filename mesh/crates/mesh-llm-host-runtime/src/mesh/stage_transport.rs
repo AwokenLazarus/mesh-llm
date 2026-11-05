@@ -442,6 +442,8 @@ pub struct StageRuntimeStatus {
     /// Cumulative runtime compute-busy time reported by the stage.
     pub compute_busy_nanos: u64,
     pub compute_operations: u64,
+    /// Single-token decode steps run on this stage: one per generated token.
+    pub compute_decode_tokens: u64,
 }
 
 /// Classifies a stage status-refresh failure so that only a definitive

@@ -285,6 +285,8 @@ pub(crate) struct StageStatusSnapshot {
     /// Cumulative runtime compute-busy time; see `skippy_serving::compute_meter`.
     pub(crate) compute_busy_nanos: u64,
     pub(crate) compute_operations: u64,
+    /// Single-token decode steps run on this stage: one per generated token.
+    pub(crate) compute_decode_tokens: u64,
     /// On a split final stage that attached its DFlash draft, the target
     /// layers the draft reads. `None` when the stage drafts nothing, so the
     /// coordinator serves stage 0 without DFlash.
