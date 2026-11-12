@@ -123,6 +123,8 @@ pub enum TopologyPlanError {
     NoSequenceIdCapacity,
     #[error("requested parallel lanes {requested} exceed sequence-id capacity {capacity}")]
     ParallelLanesExceedSequenceCapacity { requested: usize, capacity: usize },
+    /// `minimum_context` is the smallest context checked: an explicit
+    /// context override when one was given, otherwise the auto floor.
     #[error("no topology can distribute all layers and keep context >= {minimum_context}")]
     NoValidTopology { minimum_context: u32 },
     #[error("locked topology must contain at least {minimum} stages; found {actual}")]
@@ -147,6 +149,8 @@ pub enum TopologyPlanError {
     },
     #[error("locked topology ends at layer {actual_end}; model has {layer_count} layers")]
     LockedIncompleteCoverage { actual_end: u32, layer_count: u32 },
+    /// `minimum_context` is the smallest context checked, as for
+    /// [`TopologyPlanError::NoValidTopology`].
     #[error("locked topology cannot fit context >= {minimum_context}")]
     LockedTopologyDoesNotFit { minimum_context: u32 },
 }
@@ -233,6 +237,7 @@ fn plan_topology_with_required_stage0(
         minimum_context,
         input.context_length_override,
     )?;
+    let smallest_context = smallest_evaluated_context(&context_candidates, minimum_context);
     let nodes = usable_nodes(&input.nodes);
     let latency_aware = latency_aware_planning(input, &nodes);
 
@@ -283,7 +288,9 @@ fn plan_topology_with_required_stage0(
         return Ok(candidate.plan);
     }
 
-    Err(TopologyPlanError::NoValidTopology { minimum_context })
+    Err(TopologyPlanError::NoValidTopology {
+        minimum_context: smallest_context,
+    })
 }
 
 fn validate_input(input: &TopologyPlanningInput) -> Result<(), TopologyPlanError> {
@@ -336,6 +343,14 @@ fn context_candidates(
     candidates.dedup();
     candidates.reverse();
     Ok(candidates)
+}
+
+/// The smallest context a plan was checked at, which is what a "cannot fit"
+/// error reports: the explicit override when one was given (the only
+/// candidate), otherwise the auto floor. Reporting the floor for an override
+/// would name a context the planner never evaluated.
+fn smallest_evaluated_context(candidates: &[u32], minimum_context: u32) -> u32 {
+    candidates.iter().copied().min().unwrap_or(minimum_context)
 }
 
 fn parallel_lane_candidates(
@@ -1161,6 +1176,19 @@ mod tests {
             TopologyPlanError::NoValidTopology {
                 minimum_context: 65_536
             }
+        );
+    }
+
+    #[test]
+    fn no_fit_reports_the_overridden_context_not_the_floor() {
+        let mut request = input(vec![node("tiny-a", 8), node("tiny-b", 8)]);
+        request.context_length_override = Some(2048);
+
+        assert_eq!(
+            plan_topology(&request),
+            Err(TopologyPlanError::NoValidTopology {
+                minimum_context: 2048
+            })
         );
     }
 

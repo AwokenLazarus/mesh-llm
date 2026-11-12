@@ -2,7 +2,7 @@ use super::{
     CandidatePlan, TopologyPlan, TopologyPlanError, TopologyPlanningInput, TopologyStagePlan,
     UsableNode, context_candidates, decode_tpot_target_met, estimate_decode_network_ms_per_token,
     input_layer_required_bytes, layer_weight_bytes, minimum_valid_context,
-    parallel_lane_candidates, sum_u64, usable_nodes, validate_input,
+    parallel_lane_candidates, smallest_evaluated_context, sum_u64, usable_nodes, validate_input,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -25,6 +25,7 @@ pub fn plan_locked_topology(
         minimum_context,
         input.context_length_override,
     )?;
+    let smallest_context = smallest_evaluated_context(&context_candidates, minimum_context);
     let nodes = usable_nodes(&input.nodes);
     let locked_nodes = locked_stage_nodes(&nodes, locked_stages)?;
 
@@ -54,7 +55,9 @@ pub fn plan_locked_topology(
         }
     }
 
-    Err(TopologyPlanError::LockedTopologyDoesNotFit { minimum_context })
+    Err(TopologyPlanError::LockedTopologyDoesNotFit {
+        minimum_context: smallest_context,
+    })
 }
 
 fn validate_locked_stages(
@@ -312,6 +315,51 @@ mod tests {
             Err(TopologyPlanError::LockedIncompleteCoverage {
                 actual_end: 39,
                 layer_count: 40,
+            })
+        );
+    }
+
+    /// Qwen1.5-MoE-A2.7B's shape: 24 layers, a 32k native context and no
+    /// GQA, so 8 KiB of f16 KV per layer per token. Two 12-layer stages fit at
+    /// a 2k context but not at the 32k auto floor.
+    fn big_kv_request(node_gib: u64) -> TopologyPlanningInput {
+        TopologyPlanningInput {
+            native_context_length: 32_768,
+            layer_count: 24,
+            model_weight_bytes: 8 * GIB,
+            kv_bytes_per_token: 24 * 8 * 1024,
+            ..input(vec![node("a", node_gib), node("b", node_gib)])
+        }
+    }
+
+    #[test]
+    fn checks_the_lock_at_an_explicit_context_below_the_floor() {
+        let locked = vec![stage("a", 0, 12), stage("b", 12, 24)];
+        let mut request = big_kv_request(6);
+
+        assert_eq!(
+            plan_locked_topology(&request, &locked),
+            Err(TopologyPlanError::LockedTopologyDoesNotFit {
+                minimum_context: 32_768,
+            })
+        );
+
+        request.context_length_override = Some(2048);
+        let plan = plan_locked_topology(&request, &locked).unwrap();
+        assert_eq!(plan.context_length, 2048);
+        assert_eq!(plan.parallel_lanes, 1);
+    }
+
+    #[test]
+    fn no_fit_reports_the_overridden_context_not_the_floor() {
+        let locked = vec![stage("a", 0, 12), stage("b", 12, 24)];
+        let mut request = big_kv_request(4);
+        request.context_length_override = Some(2048);
+
+        assert_eq!(
+            plan_locked_topology(&request, &locked),
+            Err(TopologyPlanError::LockedTopologyDoesNotFit {
+                minimum_context: 2048,
             })
         );
     }

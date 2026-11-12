@@ -244,6 +244,69 @@ layer_end = 40
     );
 }
 
+/// `serve --ctx-size` reaches the locked fit check: a Qwen1.5-MoE-A2.7B-shaped
+/// model (24 layers, 32k native context, no GQA) whose 12/12 lock fits at 2k
+/// but not at the 32k floor plans at 2k, and only fails without the override.
+#[test]
+fn split_topology_lock_is_checked_at_the_cli_context_size() {
+    let mut package = package(24);
+    package.source_model_bytes = 10_000_000_000;
+    let participants = [
+        SplitParticipant::new(make_id(1), 8_000_000_000, None),
+        SplitParticipant::new(make_id(2), 8_000_000_000, None),
+    ];
+    let locked = [
+        crate::runtime::split_topology_lock::LockedSplitStageAssignment {
+            node_id: make_id(1),
+            layer_start: 0,
+            layer_end: 12,
+        },
+        crate::runtime::split_topology_lock::LockedSplitStageAssignment {
+            node_id: make_id(2),
+            layer_start: 12,
+            layer_end: 24,
+        },
+    ];
+    let resources = |ctx_size_override: Option<u32>| SplitTopologyResourceInputs {
+        native_context_length: 32_768,
+        kv_bytes_per_token: 24 * 8 * 1024,
+        recurrent_bytes_per_sequence_by_layer: vec![0; 24],
+        ctx_size_override,
+        parallel_override: Some(1),
+        placement: Default::default(),
+        final_stage_reserve_bytes: 0,
+        final_stage_kv_bytes_per_token: 0,
+    };
+    let plan = |ctx_size_override: Option<u32>| {
+        plan_locked_runtime_slice_topology_with_resources(
+            "topology-test",
+            "test/model",
+            &package,
+            &participants,
+            &[],
+            resources(ctx_size_override),
+            &locked,
+        )
+    };
+
+    let planned = plan(Some(2048)).expect("the lock fits at the CLI context size");
+    assert_eq!(planned.context_length, 2048);
+    assert_eq!(
+        planned
+            .stages
+            .iter()
+            .map(|stage| (stage.layer_start, stage.layer_end))
+            .collect::<Vec<_>>(),
+        vec![(0, 12), (12, 24)]
+    );
+
+    let err = plan(None).expect_err("the lock does not fit at the 32k floor");
+    assert!(
+        format!("{err:#}").contains("locked topology cannot fit context >= 32768"),
+        "{err:#}"
+    );
+}
+
 #[test]
 fn explicit_cli_model_identity_bypasses_configured_topology() {
     let package = package(40);
