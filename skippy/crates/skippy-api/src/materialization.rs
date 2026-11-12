@@ -424,8 +424,8 @@ mod tests {
         fs::write(&path, b"layer bytes").unwrap();
         let artifact = artifact("layer.gguf", b"layer bytes");
         verify_package_v2_artifact(dir.path(), &artifact).unwrap();
-        let first = crate::source_registry::verified_path_fingerprint(std::slice::from_ref(&path))
-            .unwrap();
+        let first =
+            crate::source_registry::verified_path_fingerprint(std::slice::from_ref(&path)).unwrap();
         let before = hashed();
 
         // Same bytes and mtime in a new file renamed over the old one.
@@ -439,8 +439,8 @@ mod tests {
             .set_modified(original)
             .unwrap();
         fs::rename(&replacement, &path).unwrap();
-        let second = crate::source_registry::verified_path_fingerprint(std::slice::from_ref(&path))
-            .unwrap();
+        let second =
+            crate::source_registry::verified_path_fingerprint(std::slice::from_ref(&path)).unwrap();
         assert!(first != second, "a new file has a new identity");
 
         verify_package_v2_artifact(dir.path(), &artifact).unwrap();
