@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
@@ -36,6 +37,30 @@ pub(super) struct VerifiedFileFingerprint {
     ctime_nanos: i128,
     device: u64,
     inode: u128,
+}
+
+impl VerifiedFileFingerprint {
+    /// Whether a later edit is guaranteed to change this fingerprint: its
+    /// modification time, and on Unix its change time, are at least `window`
+    /// before `now`. Timestamps are coarse (Linux before 6.13 stamps ctime
+    /// from the jiffy clock, some filesystems keep 1 s or 2 s), so an edit in
+    /// the same tick as the one a fingerprint recorded can leave it unchanged.
+    pub(super) fn settled_at(&self, now: SystemTime, window: Duration) -> bool {
+        let Some(limit) = now
+            .checked_sub(window)
+            .and_then(|limit| limit.duration_since(UNIX_EPOCH).ok())
+            .map(|limit| limit.as_nanos())
+        else {
+            return false;
+        };
+        // Windows reports ChangeTime from another epoch; like the native
+        // runtime cache, it settles on the modification time alone.
+        #[cfg(unix)]
+        let changed = u128::try_from(self.ctime_nanos).is_ok_and(|ctime| ctime <= limit);
+        #[cfg(not(unix))]
+        let changed = true;
+        changed && self.mtime_nanos <= limit
+    }
 }
 
 /// What a verified fingerprint pins beyond size and mtime: the file's identity

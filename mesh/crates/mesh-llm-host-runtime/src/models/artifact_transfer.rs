@@ -344,7 +344,10 @@ pub(crate) fn local_artifact_satisfies(
         return Ok(false);
     }
     if verify_sha && let Some(expected_sha) = request.expected_sha256.as_deref() {
-        return Ok(file_sha256_hex(&path)?.eq_ignore_ascii_case(expected_sha));
+        // Shares the process's verified-hash cache with package-v2 admission,
+        // so the stage load that follows does not read the artifact again.
+        return skippy_api::materialization::file_matches_sha256(&path, expected_sha)
+            .context("hash local package artifact");
     }
     Ok(true)
 }
